@@ -1,0 +1,5 @@
+fire
+sentencepiece
+mindspore>=2.2.0
+ml_dtypes
+simple-parsing

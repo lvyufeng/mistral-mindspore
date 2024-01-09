@@ -13,6 +13,7 @@ from mindspore import ops, nn, Parameter, Tensor
 from mindspore._c_expression import Tensor as Tensor_
 from mindspore.common.initializer import initializer
 from mindspore.ops.operations._inner_ops import Send, Receive
+from mindspore.ops._primitive_cache import _get_cache_prim
 
 from simple_parsing.helpers import Serializable
 
@@ -89,9 +90,6 @@ class Embedding(nn.Cell):
         output = output_for_reshape.reshape(out_shape)
         return output
 
-def dense_construct(self, x):
-    return ops.dense(x, self.weight, self.bias)
-
 class Dense(nn.Cell):
     """patched Dense"""
     def __init__(self,
@@ -113,7 +111,8 @@ class Dense(nn.Cell):
                 bias_init, [out_channels], dtype=dtype), name="bias")
 
     def construct(self, x):
-        return ops.dense(x, self.weight, self.bias)
+        dense_ = _get_cache_prim(ops.Dense)()
+        return dense_(x, self.weight, self.bias)
 
 class Attention(nn.Cell):
     def __init__(self, args: ModelArgs, dtype=mindspore.float16):
@@ -309,12 +308,13 @@ class Transformer(nn.Cell):
             assert self.tok_embeddings is not None
             h = self.tok_embeddings(input_ids)
         else:
-            recv = Receive(sr_tag=0, src_rank=self.pipeline_rank - 1,
+            recv = _get_cache_prim(Receive)(sr_tag=0, src_rank=self.pipeline_rank - 1,
                            shape=[num_toks, self.args.dim], dtype=self.dtype, group=world_group)
             h = recv()
 
         freqs_cis = self.freqs_cis[input_metadata.positions]
         for local_layer_id, layer in enumerate(self.layers.values()):
+            print(local_layer_id)
             if cache is not None:
                 assert input_metadata is not None
                 cache_view = cache.get_view(local_layer_id, input_metadata)
@@ -325,7 +325,7 @@ class Transformer(nn.Cell):
         if cache is not None:
             cache.update_seqlens(seqlens)
         if self.pipeline_rank < self.num_pipeline_ranks - 1:
-            send = Send(sr_tag=0, dest_rank=self.pipeline_rank + 1, group=world_group)
+            send = _get_cache_prim(Send)(sr_tag=0, dest_rank=self.pipeline_rank + 1, group=world_group)
             send(h)
             return h
         else:
@@ -348,7 +348,7 @@ class Transformer(nn.Cell):
             assert self.output is not None
             outs = self.output(h)
         if self.num_pipeline_ranks > 1:
-            broadcast = ops.Broadcast(self.num_pipeline_ranks - 1, group=world_group)
+            broadcast = _get_cache_prim(ops.Broadcast)(self.num_pipeline_ranks - 1, group=world_group)
             outs, = broadcast((outs,))
 
         return outs.float()

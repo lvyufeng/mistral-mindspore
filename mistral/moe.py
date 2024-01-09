@@ -29,7 +29,7 @@ class MoeLayer(nn.Cell):
             non_zero = ops.nonzero(selected_experts == i)
             if 0 not in non_zero.shape:
                 batch_idx, nth_expert = non_zero.tensor_split(2, 1)
-                results[batch_idx] += weights[batch_idx, nth_expert, None] * expert(
+                results[batch_idx] = results[batch_idx] + weights[batch_idx, nth_expert, None] * expert(
                     inputs[batch_idx]
                 )
         return results

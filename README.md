@@ -41,6 +41,12 @@ wget https://files.mixtral-8x7b-v0-1.mistral.ai/Mixtral-8x7B-v0.1-Instruct.tar
 tar -xf Mixtral-8x7B-v0.1-Instruct.tar
 ```
 
+Prepare `OpenMPI` lib:
+
+```bash
+conda install openmpi
+```
+
 ```bash
 mpirun -n 2 python -m main demo /path/to/Mixtral-8x7B-v0.1-Instruct/ --num_pipeline_ranks=2
 ```
