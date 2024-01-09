@@ -20,12 +20,6 @@ wget https://files.mistral-7b-v0-1.mistral.ai/mistral-7B-v0.1.tar
 tar -xf mistral-7B-v0.1.tar
 ```
 
-## Convert checkpoint
-
-```bash
-python convert.py --pth_file /path/to/mistral-7B-v0.1/consolidated.00.pth
-```
-
 ## Run the model
 
 ```bash
@@ -45,10 +39,6 @@ When running models that are too large to fit a single GPU's memory, use pipelin
 ```bash
 wget https://files.mixtral-8x7b-v0-1.mistral.ai/Mixtral-8x7B-v0.1-Instruct.tar
 tar -xf Mixtral-8x7B-v0.1-Instruct.tar
-```
-
-```bash
-python convert.py --pth_file /path/to/Mixtral-8x7B-v0.1-Instruct/consolidated.00.pth
 ```
 
 ```bash

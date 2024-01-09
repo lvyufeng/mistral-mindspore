@@ -26,8 +26,10 @@ class MoeLayer(nn.Cell):
         weights = ops.softmax(weights, axis=1, dtype=mindspore.float32).to(inputs.dtype)
         results = ops.zeros_like(inputs)
         for i, expert in enumerate(self.experts):
-            batch_idx, nth_expert = ops.where(selected_experts == i)
-            results[batch_idx] += weights[batch_idx, nth_expert, None] * expert(
-                inputs[batch_idx]
-            )
+            non_zero = ops.nonzero(selected_experts == i)
+            if 0 not in non_zero.shape:
+                batch_idx, nth_expert = non_zero.tensor_split(2, 1)
+                results[batch_idx] += weights[batch_idx, nth_expert, None] * expert(
+                    inputs[batch_idx]
+                )
         return results

@@ -6,8 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
+
 import mindspore
-from mindspore import ops, nn, Parameter
+from mindspore import ops, nn, Parameter, Tensor
+from mindspore._c_expression import Tensor as Tensor_
 from mindspore.common.initializer import initializer
 from mindspore.ops.operations._inner_ops import Send, Receive
 
@@ -16,6 +19,7 @@ from simple_parsing.helpers import Serializable
 from mistral.rope import precompute_freqs_cis, apply_rotary_emb
 from mistral.cache import CacheView, RotatingBufferCache
 from mistral.moe import MoeArgs, MoeLayer
+from mistral.ckpt_reader import load
 
 from mistral.attention import ref_attention
 
@@ -99,8 +103,9 @@ class Dense(nn.Cell):
                  dtype=mindspore.float32):
         """Initialize Dense."""
         super().__init__()
-        self.weight = Parameter(initializer(
-            weight_init, [out_channels, in_channels], dtype=dtype), name="weight")
+        # self.weight = Parameter(initializer(
+        #     weight_init, [out_channels, in_channels], dtype=dtype), name="weight")
+        self.weight = Parameter(Tensor_(shape=[out_channels, in_channels], dtype=dtype), name="weight")
 
         self.bias = None
         if has_bias:
@@ -354,7 +359,7 @@ class Transformer(nn.Cell):
         for k, v in state_dict.items():
             if k.startswith("tok_embeddings"):
                 if self.pipeline_rank == 0:
-                    state_to_load[k] = v
+                    state_to_load[k] = Parameter(Tensor_.from_numpy(v.astype(np.float16, copy=False)))
                 else:
                     logging.debug(
                         "Skipping parameter %s at pipeline rank %d",
@@ -364,7 +369,7 @@ class Transformer(nn.Cell):
                     skipped.add(k)
             elif k.startswith("norm") or k.startswith("output"):
                 if self.pipeline_rank == self.num_pipeline_ranks - 1:
-                    state_to_load[k] = v
+                    state_to_load[k] = Parameter(Tensor_.from_numpy(v.astype(np.float16, copy=False)))
                 else:
                     logging.debug(
                         "Skipping parameter %s at pipeline rank %d",
@@ -375,7 +380,7 @@ class Transformer(nn.Cell):
             elif k.startswith("layers"):
                 layer_id = k.split(".")[1]
                 if layer_id in self.layers:
-                    state_to_load[k] = v
+                    state_to_load[k] = Parameter(Tensor_.from_numpy(v.astype(np.float16, copy=False)))
                 else:
                     logging.debug(
                         "Skipping parameter %s at pipeline rank %d",
@@ -386,7 +391,7 @@ class Transformer(nn.Cell):
             else:
                 raise ValueError(f"Unexpected key {k}")
         assert len(set(state_dict.keys())) == len(skipped.union(set(state_to_load.keys())))
-        mindspore.load_param_into_net(self, state_dict)
+        mindspore.load_param_into_net(self, state_to_load)
 
     @staticmethod
     def from_folder(
@@ -408,6 +413,8 @@ class Transformer(nn.Cell):
             num_pipeline_ranks=num_pipeline_ranks,
             dtype=dtype
         )
-        loaded = mindspore.load_checkpoint(str(folder / "consolidated.00.ckpt"))
+        print('start load')
+        loaded = load(str(folder / "consolidated.00.pth"), mmap=True)
+        print('finish load')
         model.load_state_dict(loaded)
         return model
