@@ -501,14 +501,14 @@ class BlockDiagonalMask(AttentionBias):
         dtype = mindspore.float32,
     ) -> mindspore.Tensor:
         """Materialize the attention bias - for debugging & testing"""
-        assert shape[-1] == self.k_seqinfo.seqstart_py[-1], (
-            shape[-1],
-            self.k_seqinfo.seqstart_py[-1],
-        )
-        assert shape[-2] == self.q_seqinfo.seqstart_py[-1], (
-            shape[-2],
-            self.q_seqinfo.seqstart_py[-1],
-        )
+        # assert shape[-1] == self.k_seqinfo.seqstart_py[-1], (
+        #     shape[-1],
+        #     self.k_seqinfo.seqstart_py[-1],
+        # )
+        # assert shape[-2] == self.q_seqinfo.seqstart_py[-1], (
+        #     shape[-2],
+        #     self.q_seqinfo.seqstart_py[-1],
+        # )
         mask = ops.fill(dtype, shape[-2:], -math.inf)
         for i, ((q_start, q_end), (k_start, k_end)) in enumerate(
             zip(
@@ -764,10 +764,10 @@ class BlockDiagonalCausalWithOffsetPaddedKeysMask(AttentionBias):
         dtype = mindspore.float32,
     ) -> mindspore.Tensor:
         """Materialize the attention bias - for debugging & testing"""
-        if shape[-1] != self.k_seqinfo.seqstart_py[-1]:
-            raise ValueError("k shapes wrong")
-        if shape[-2] != self.q_seqinfo.seqstart_py[-1]:
-            raise ValueError("q shapes wrong")
+        # if shape[-1] != self.k_seqinfo.seqstart_py[-1]:
+        #     raise ValueError("k shapes wrong")
+        # if shape[-2] != self.q_seqinfo.seqstart_py[-1]:
+        #     raise ValueError("q shapes wrong")
         mask = ops.fill(dtype, shape[-2:], -math.inf)
 
         for i, ((q_start, q_end), (k_start, k_end)) in enumerate(

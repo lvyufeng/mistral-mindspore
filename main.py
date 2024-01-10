@@ -88,7 +88,7 @@ def generate(prompts: List[str], model: Transformer, tokenizer: Tokenizer, *, ma
             logprobs[i_seq].extend([logits[offset + i, sequence[i + 1]].item() for i in range(len(sequence) - 1)])
             offset += len(sequence)
 
-        last_token_prelogits = prelogits.index_select(0, mindspore.Tensor([len(p) for p in prompt_chunks]).cumsum(axis=0) - 1)
+        last_token_prelogits = prelogits.index_select(0, mindspore.Tensor([len(p) for p in prompt_chunks]).astype(mindspore.int32).cumsum(axis=0) - 1)
         assert last_token_prelogits.shape == (B, V)
 
     # decode

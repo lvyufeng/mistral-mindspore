@@ -9,8 +9,9 @@ from typing import List, Optional
 import numpy as np
 
 import mindspore
-from mindspore import ops, nn, Parameter, Tensor
+from mindspore import ops, nn, Parameter
 from mindspore._c_expression import Tensor as Tensor_
+from mindspore.common._stub_tensor import StubTensor
 from mindspore.common.initializer import initializer
 from mindspore.ops.operations._inner_ops import Send, Receive
 from mindspore.ops._primitive_cache import _get_cache_prim
@@ -21,10 +22,18 @@ from mistral.rope import precompute_freqs_cis, apply_rotary_emb
 from mistral.cache import CacheView, RotatingBufferCache
 from mistral.moe import MoeArgs, MoeLayer
 from mistral.ckpt_reader import load
+from mistral.attn_bias import AttentionBias
 
 from mistral.attention import ref_attention
 
-world_group = 'nccl_world_group' if mindspore.get_context('device_target') == 'GPU' else 'hccl_world_group'
+try:
+    from mindspore.nn.layer.flash_attention import FlashAttention
+    FLASHATTENTION_IMPORT_VALID = True
+except ImportError:
+    FLASHATTENTION_IMPORT_VALID = False
+
+is_ascend = mindspore.get_context('device_target') == 'Ascend'
+world_group = 'hccl_world_group' if is_ascend else 'nccl_world_group'
 
 @dataclass
 class ModelArgs(Serializable):
@@ -107,8 +116,7 @@ class Dense(nn.Cell):
 
         self.bias = None
         if has_bias:
-            self.bias = Parameter(initializer(
-                bias_init, [out_channels], dtype=dtype), name="bias")
+            self.bias = Parameter(Tensor_(shape=[out_channels], dtype=dtype), name="bias")
 
     def construct(self, x):
         dense_ = _get_cache_prim(ops.Dense)()
@@ -131,6 +139,13 @@ class Attention(nn.Cell):
         self.wk = Dense(args.dim, args.n_kv_heads * args.head_dim, has_bias=False, dtype=dtype)
         self.wv = Dense(args.dim, args.n_kv_heads * args.head_dim, has_bias=False, dtype=dtype)
         self.wo = Dense(args.n_heads * args.head_dim, args.dim, has_bias=False, dtype=dtype)
+
+        if is_ascend and FLASHATTENTION_IMPORT_VALID:
+            self.flash_attention = FlashAttention(head_dim=args.head_dim,
+                                                  head_num=args.n_heads,
+                                                  prev_block_num=65536,
+                                                  next_block_num=0,
+                                                  high_precision=True)
 
     def construct(
         self,
@@ -166,9 +181,37 @@ class Attention(nn.Cell):
 
         # xformers requires (B=1, S, H, D)
         xq, key, val = xq[None, ...], key[None, ...], val[None, ...]
-        output = ref_attention(
-            xq, key, val, None if cache is None else cache.mask
-        )
+        if hasattr(self, 'flash_attention'):
+            origin_len = xq.shape[1]
+            if xq.shape[1] % 16 != 0:
+                xq = ops.pad(xq, (0, 0, 0, 0, 0, 16 - xq.shape[1] % 16), value=0)
+            if key.shape[1] % 16 != 0:
+                key = ops.pad(key, (0, 0, 0, 0, 0, 16 - key.shape[1] % 16), value=0)
+            if val.shape[1] % 16 != 0:
+                val = ops.pad(val, (0, 0, 0, 0, 0, 16 - val.shape[1] % 16), value=0)
+            if cache is None:
+                attn_bias = None
+            else:
+                if isinstance(cache.mask, AttentionBias):
+                    attn_bias = (
+                        cache.mask.materialize((xq.shape[0], 1, xq.shape[1], key.shape[1]))
+                        .to(xq.dtype)
+                        .squeeze()
+                    )
+                    d_min = float(np.finfo(mindspore.dtype_to_nptype(attn_bias.dtype)).min)
+                    attn_bias = attn_bias.masked_fill(attn_bias == d_min, 1.0)
+                else:
+                    attn_bias = cache.mask
+            output = self.flash_attention(xq.swapaxes(1, 2), key.swapaxes(1, 2), val.swapaxes(1, 2), attn_bias)
+            output = output.swapaxes(1, 2)[:, :origin_len]
+            # output = ref_attention(
+            #     xq, key, val, None if cache is None else cache.mask
+            # )
+            # output = output[:, :origin_len]
+        else:
+            output = ref_attention(
+                xq, key, val, None if cache is None else cache.mask
+            )
 
         return self.wo(output.view(seqlen_sum, self.n_heads * self.head_dim))
 
@@ -309,12 +352,15 @@ class Transformer(nn.Cell):
             h = self.tok_embeddings(input_ids)
         else:
             recv = _get_cache_prim(Receive)(sr_tag=0, src_rank=self.pipeline_rank - 1,
-                           shape=[num_toks, self.args.dim], dtype=self.dtype, group=world_group)
-            h = recv()
+                        shape=[num_toks, self.args.dim], dtype=self.dtype, group=world_group)
+            if is_ascend:
+                depend = mindspore.tensor(0, self.dtype)
+                h = recv(depend)
+            else:
+                h = recv()
 
         freqs_cis = self.freqs_cis[input_metadata.positions]
         for local_layer_id, layer in enumerate(self.layers.values()):
-            print(local_layer_id)
             if cache is not None:
                 assert input_metadata is not None
                 cache_view = cache.get_view(local_layer_id, input_metadata)
@@ -413,8 +459,6 @@ class Transformer(nn.Cell):
             num_pipeline_ranks=num_pipeline_ranks,
             dtype=dtype
         )
-        print('start load')
         loaded = load(str(folder / "consolidated.00.pth"), mmap=True)
-        print('finish load')
         model.load_state_dict(loaded)
         return model
