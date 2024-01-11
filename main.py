@@ -134,7 +134,8 @@ def demo(
     model_path: str, max_tokens: int = 35, temperature: float = 0, num_pipeline_ranks=1
 ):
     if num_pipeline_ranks > 1:
-        backend_name = "nccl" if mindspore.get_context('device_target') == 'GPU' else 'hccl'
+        is_ascend = mindspore.get_context('device_target') == 'Ascend'
+        backend_name = "hccl" if is_ascend else 'nccl'
         init(backend_name)
         should_print = get_rank() == 0
     else:

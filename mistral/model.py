@@ -394,9 +394,18 @@ class Transformer(nn.Cell):
             assert self.output is not None
             outs = self.output(h)
         if self.num_pipeline_ranks > 1:
-            broadcast = _get_cache_prim(ops.Broadcast)(self.num_pipeline_ranks - 1, group=world_group)
-            outs, = broadcast((outs,))
-
+            if not is_ascend:
+                broadcast = _get_cache_prim(ops.Broadcast)(self.num_pipeline_ranks - 1, group=world_group)
+                outs, = broadcast((outs,))
+            else:
+                # broadcast op on Ascend cause error, use send/recv instead
+                if self.pipeline_rank == self.num_pipeline_ranks - 1:
+                    send = _get_cache_prim(Send)(sr_tag=1, dest_rank=0, group=world_group)
+                    send(outs)
+                elif self.pipeline_rank == 0:
+                    recv = _get_cache_prim(Receive)(sr_tag=1, src_rank=self.num_pipeline_ranks - 1,
+                                shape=outs.shape, dtype=outs.dtype, group=world_group)
+                    outs = recv(outs)
         return outs.float()
 
     def load_state_dict(self, state_dict, *args, **kwargs):
