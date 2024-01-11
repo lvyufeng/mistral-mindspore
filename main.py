@@ -20,7 +20,7 @@ def sample_top_p(probs: mindspore.Tensor, p: float):
     probs_sum = ops.cumsum(probs_sort, axis=-1)
     mask = probs_sum - probs_sort > p
     probs_sort[mask] = 0.0
-    probs_sort.div_(probs_sort.sum(ops=-1, keepdim=True))
+    probs_sort = probs_sort.div(probs_sort.sum(axis=-1, keepdims=True))
     next_token = ops.multinomial(probs_sort, num_samples=1)
     return ops.gather_elements(probs_idx, -1, next_token)
 
