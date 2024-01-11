@@ -8,7 +8,7 @@ def ref_attention_bmk(q, k, v, attn_bias=None, p=0.0):
         attn_bias = (
             attn_bias.materialize((q.shape[0], 1, q.shape[1], k.shape[1]))
             .to(q.dtype)
-            .squeeze()
+            .squeeze(1)
         )
     q = q * (1.0 / q.shape[-1] ** 0.5)
     if attn_bias is None:

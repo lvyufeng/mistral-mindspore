@@ -11,7 +11,31 @@ from mistral.model import Transformer
 from mistral.tokenizer import Tokenizer
 from mistral.cache import RotatingBufferCache
 
-# mindspore.set_context(pynative_synchronize=True)
+mindspore.set_context(pynative_synchronize=True)
+is_ascend = mindspore.get_context('device_target') == 'Ascend'
+
+def custom_multinomial(probabilities, num_samples, replacement=True):
+    """custom multinomial"""
+    if replacement:
+        # with replacement
+        cumulative_probs = ops.cumsum(probabilities, axis=-1)
+        uniform_samples = ops.rand(probabilities.shape[:-1] + (num_samples,))
+        if cumulative_probs.dtype == mindspore.float16:
+            cumulative_probs = cumulative_probs.astype(mindspore.float32)
+        samples = ops.searchsorted(cumulative_probs, uniform_samples, right=True)
+    else:
+        # without replacement
+        n_dist = 1
+        if probabilities.ndim > 1:
+            n_dist = probabilities.shape[-2]
+        random_uniform = ops.rand((n_dist * probabilities.shape[-1],))
+        if n_dist != 1:
+            random_uniform = random_uniform.reshape(n_dist, probabilities.shape[-1])
+
+        vals = ops.div(ops.log(random_uniform), probabilities + 1e-6)
+        _, samples = ops.top_k(vals, num_samples)
+
+    return samples
 
 def sample_top_p(probs: mindspore.Tensor, p: float):
     assert 0 <= p <= 1
@@ -21,7 +45,11 @@ def sample_top_p(probs: mindspore.Tensor, p: float):
     mask = probs_sum - probs_sort > p
     probs_sort[mask] = 0.0
     probs_sort = probs_sort.div(probs_sort.sum(axis=-1, keepdims=True))
-    next_token = ops.multinomial(probs_sort, num_samples=1)
+
+    if is_ascend:
+        next_token = ops.multinomial(probs_sort, num_samples=1)
+    else:
+        next_token = custom_multinomial(probs_sort, num_samples=1)
     return ops.gather_elements(probs_idx, -1, next_token)
 
 
@@ -134,7 +162,6 @@ def demo(
     model_path: str, max_tokens: int = 35, temperature: float = 0, num_pipeline_ranks=1
 ):
     if num_pipeline_ranks > 1:
-        is_ascend = mindspore.get_context('device_target') == 'Ascend'
         backend_name = "hccl" if is_ascend else 'nccl'
         init(backend_name)
         should_print = get_rank() == 0
